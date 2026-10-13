@@ -24,7 +24,13 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(cfg: Config) -> Self {
-        Self { cfg: Mutex::new(cfg), io: Default::default(), last: Default::default(), v4: Default::default(), wake: Notify::new() }
+        Self {
+            cfg: Mutex::new(cfg),
+            io: Default::default(),
+            last: Default::default(),
+            v4: Default::default(),
+            wake: Notify::new(),
+        }
     }
 }
 
@@ -42,7 +48,11 @@ pub struct Info {
 }
 
 fn info(cfg: &Config) -> Option<Info> {
-    cfg.device.as_ref().map(|d| Info { name: cfg.name.clone(), ip: d.ip.to_string(), mac: d.mac.clone() })
+    cfg.device.as_ref().map(|d| Info {
+        name: cfg.name.clone(),
+        ip: d.ip.to_string(),
+        mac: d.mac.clone(),
+    })
 }
 
 /// Runs `op` against the saved device. On timeout, rescans by MAC in case DHCP
@@ -53,23 +63,40 @@ where
     Fut: Future<Output = Result<T, String>>,
 {
     let state = app.state::<AppState>();
-    let _io = state.io.lock().await;
-    let dev = state.cfg.lock().unwrap().device.clone().ok_or("nenhum aparelho configurado")?;
-    match op(dev.clone()).await {
-        Err(e) if device::is_timeout(&e) => {
-            let moved = discovery::scan(SCAN_WAIT).await?.into_iter().find(|f| f.mac == dev.mac && f.ip != dev.ip);
-            let Some(found) = moved else { return Err(e) };
-            let dev = Device { ip: found.ip, ..dev };
-            {
-                let mut cfg = state.cfg.lock().unwrap();
-                cfg.device = Some(dev.clone());
-                config::save(app, &cfg)?;
-            }
-            let _ = app.emit("ac-info", info(&state.cfg.lock().unwrap()));
-            op(dev).await
+    let (dev, err) = {
+        let _io = state.io.lock().await;
+        let dev = state
+            .cfg
+            .lock()
+            .unwrap()
+            .device
+            .clone()
+            .ok_or("nenhum aparelho configurado")?;
+        match op(dev.clone()).await {
+            Err(e) if device::is_timeout(&e) => (dev, e),
+            r => return r,
         }
-        r => r,
-    }
+    };
+    // The scan has its own socket, so other commands don't wait behind it.
+    let moved = discovery::scan(SCAN_WAIT)
+        .await?
+        .into_iter()
+        .find(|f| f.mac == dev.mac && f.ip != dev.ip);
+    let Some(found) = moved else { return Err(err) };
+    let _io = state.io.lock().await;
+    let dev = {
+        let mut cfg = state.cfg.lock().unwrap();
+        // Re-paired meanwhile? Then this result is stale.
+        let Some(d) = cfg.device.as_mut().filter(|d| d.mac == dev.mac) else {
+            return Err(err);
+        };
+        d.ip = found.ip;
+        let d = d.clone();
+        config::save(app, &cfg)?;
+        d
+    };
+    let _ = app.emit("ac-info", info(&state.cfg.lock().unwrap()));
+    op(dev).await
 }
 
 fn publish(app: &AppHandle, snap: Snapshot) {
@@ -89,7 +116,10 @@ pub async fn poll(app: &AppHandle) -> Result<Snapshot, String> {
         }
     };
     let room = device::room_temp(&status, &mut app.state::<AppState>().v4.lock().unwrap());
-    let props = status.iter().filter_map(|(k, v)| v.as_i64().map(|n| (k.clone(), n))).collect();
+    let props = status
+        .iter()
+        .filter_map(|(k, v)| v.as_i64().map(|n| (k.clone(), n)))
+        .collect();
     let snap = Snapshot { props, room };
     publish(app, snap.clone());
     Ok(snap)
@@ -111,8 +141,10 @@ pub async fn apply(app: &AppHandle, props: Vec<(String, i64)>) -> Result<(), Str
     Ok(())
 }
 
+/// Tray "Ligar/Desligar": reads Pow fresh, the cached snapshot can be 60s old.
 pub async fn toggle_power(app: &AppHandle) -> Result<(), String> {
-    let on = app.state::<AppState>().last.lock().unwrap().as_ref().is_some_and(|s| s.props.get("Pow") == Some(&1));
+    let st = with_device(app, |d| async move { d.status(&["Pow"]).await }).await?;
+    let on = st.get("Pow").and_then(|v| v.as_i64()) == Some(1);
     apply(app, vec![("Pow".into(), if on { 0 } else { 1 })]).await
 }
 
@@ -124,7 +156,10 @@ pub fn spawn_poller(app: AppHandle) {
             if state.cfg.lock().unwrap().device.is_some() {
                 let _ = poll(&app).await;
             }
-            let visible = app.get_webview_window("main").and_then(|w| w.is_visible().ok()).unwrap_or(false);
+            let visible = app
+                .get_webview_window("main")
+                .and_then(|w| w.is_visible().ok())
+                .unwrap_or(false);
             let wait = Duration::from_secs(if visible { 5 } else { 60 });
             tokio::select! {
                 _ = tokio::time::sleep(wait) => {}
@@ -152,11 +187,13 @@ pub async fn scan() -> Result<Vec<Found>, String> {
 #[tauri::command]
 pub async fn bind(app: AppHandle, found: Found) -> Result<Info, String> {
     let state = app.state::<AppState>();
-    let dev = {
-        let _io = state.io.lock().await;
-        device::bind(found.ip, &found.mac, found.version).await?
+    // io stays locked until the new device is in place, so no poll sees a half swap.
+    let _io = state.io.lock().await;
+    let dev = device::bind(found.ip, &found.mac, found.version).await?;
+    let cfg = Config {
+        name: found.name,
+        device: Some(dev),
     };
-    let cfg = Config { name: found.name, device: Some(dev) };
     config::save(&app, &cfg)?;
     let out = info(&cfg);
     *state.cfg.lock().unwrap() = cfg;
@@ -164,11 +201,6 @@ pub async fn bind(app: AppHandle, found: Found) -> Result<Info, String> {
     *state.last.lock().unwrap() = None;
     state.wake.notify_one();
     Ok(out.unwrap())
-}
-
-#[tauri::command]
-pub async fn refresh(app: AppHandle) -> Result<Snapshot, String> {
-    poll(&app).await
 }
 
 #[tauri::command]

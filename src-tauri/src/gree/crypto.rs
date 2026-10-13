@@ -6,7 +6,9 @@ use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-const GCM_NONCE: [u8; 12] = [0x54, 0x40, 0x78, 0x44, 0x49, 0x67, 0x5a, 0x51, 0x6c, 0x5e, 0x63, 0x13];
+const GCM_NONCE: [u8; 12] = [
+    0x54, 0x40, 0x78, 0x44, 0x49, 0x67, 0x5a, 0x51, 0x6c, 0x5e, 0x63, 0x13,
+];
 const GCM_AAD: &[u8] = b"qualcomm-test";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,7 +35,9 @@ impl Version {
 }
 
 fn key16(key: &str) -> Result<[u8; 16], String> {
-    key.as_bytes().try_into().map_err(|_| format!("chave inválida (precisa ter 16 bytes): {key:?}"))
+    key.as_bytes()
+        .try_into()
+        .map_err(|_| format!("chave inválida (precisa ter 16 bytes): {key:?}"))
 }
 
 /// Returns (base64 pack, base64 tag). The tag only exists for V2.
@@ -62,7 +66,9 @@ pub fn encrypt(v: Version, key: &str, plain: &str) -> Result<(String, Option<Str
 
 pub fn decrypt(v: Version, key: &str, pack: &str, tag: Option<&str>) -> Result<Value, String> {
     let k = key16(key)?;
-    let mut buf = B64.decode(pack).map_err(|e| format!("base64 inválido: {e}"))?;
+    let mut buf = B64
+        .decode(pack)
+        .map_err(|e| format!("base64 inválido: {e}"))?;
     match v {
         Version::V1 => {
             if buf.is_empty() || buf.len() % 16 != 0 {
@@ -74,17 +80,28 @@ pub fn decrypt(v: Version, key: &str, pack: &str, tag: Option<&str>) -> Result<V
             }
         }
         Version::V2 => {
-            let tag = B64.decode(tag.ok_or("resposta GCM sem tag")?).map_err(|e| format!("tag inválida: {e}"))?;
+            let tag = B64
+                .decode(tag.ok_or("resposta GCM sem tag")?)
+                .map_err(|e| format!("tag inválida: {e}"))?;
             if tag.len() != 16 {
                 return Err("tag GCM com tamanho inválido".into());
             }
             Aes128Gcm::new(&k.into())
-                .decrypt_in_place_detached(Nonce::from_slice(&GCM_NONCE), GCM_AAD, &mut buf, Tag::from_slice(&tag))
+                .decrypt_in_place_detached(
+                    Nonce::from_slice(&GCM_NONCE),
+                    GCM_AAD,
+                    &mut buf,
+                    Tag::from_slice(&tag),
+                )
                 .map_err(|_| "falha ao descriptografar (GCM)".to_string())?;
         }
     }
     // Like greeclimate: drop everything after the last '}' (padding / junk).
-    let end = buf.iter().rposition(|&b| b == b'}').ok_or("pack descriptografado não é JSON")? + 1;
+    let end = buf
+        .iter()
+        .rposition(|&b| b == b'}')
+        .ok_or("pack descriptografado não é JSON")?
+        + 1;
     let text = std::str::from_utf8(&buf[..end]).map_err(|_| "pack descriptografado não é UTF-8")?;
     serde_json::from_str(text).map_err(|e| format!("JSON inválido no pack: {e}"))
 }
@@ -104,7 +121,10 @@ mod tests {
         let v1 = Version::V1.generic_key();
         let v2 = Version::V2.generic_key();
         assert_eq!(encrypt(Version::V1, v1, PLAIN).unwrap(), (ECB.into(), None));
-        assert_eq!(encrypt(Version::V2, v2, PLAIN).unwrap(), (GCM.into(), Some(GCM_TAG.into())));
+        assert_eq!(
+            encrypt(Version::V2, v2, PLAIN).unwrap(),
+            (GCM.into(), Some(GCM_TAG.into()))
+        );
         let want: Value = serde_json::from_str(PLAIN).unwrap();
         assert_eq!(decrypt(Version::V1, v1, ECB, None).unwrap(), want);
         assert_eq!(decrypt(Version::V2, v2, GCM, Some(GCM_TAG)).unwrap(), want);

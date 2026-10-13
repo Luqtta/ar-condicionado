@@ -10,8 +10,13 @@ use tauri_plugin_autostart::MacosLauncher;
 pub fn run() {
     tauri::Builder::default()
         // must be the first plugin
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| tray::show_flyout(app, None)))
-        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            tray::show_flyout(app, None)
+        }))
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             app.manage(commands::AppState::new(config::load(app.handle())));
             tray::setup(app.handle())?;
@@ -31,7 +36,6 @@ pub fn run() {
             commands::get_snapshot,
             commands::scan,
             commands::bind,
-            commands::refresh,
             commands::send,
             commands::rename,
             commands::show,

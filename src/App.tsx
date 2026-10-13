@@ -14,9 +14,14 @@ import { DIRECTIONS, directionOf, directionProps, FAN_SPEEDS, MODES } from "./li
 export default function App() {
   const ac = useAcState();
   const [view, setView] = useState<"main" | "setup" | "settings">("main");
+  // Bumped by the tray item so an already open setup screen scans again.
+  const [scanId, setScanId] = useState(0);
 
   useEffect(() => {
-    const off = listen("ac-scan", () => setView("setup"));
+    const off = listen("ac-scan", () => {
+      setView("setup");
+      setScanId((n) => n + 1);
+    });
     return () => void off.then((f) => f());
   }, []);
 
@@ -24,8 +29,9 @@ export default function App() {
     <div className="h-full rounded-[12px] bg-panel border border-white/10 text-white overflow-hidden relative">
       {ac.info === undefined ? null : ac.info === null || view === "setup" ? (
         <Setup
+          key={scanId}
           onDone={(info) => {
-            ac.setInfo(info);
+            ac.paired(info);
             setView("main");
           }}
           onCancel={ac.info ? () => setView("main") : undefined}

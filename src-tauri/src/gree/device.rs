@@ -12,8 +12,21 @@ const TIMEOUT: Duration = Duration::from_secs(2);
 const RETRIES: usize = 2;
 
 pub const STATUS_COLS: &[&str] = &[
-    "Pow", "Mod", "SetTem", "TemUn", "TemSen", "WdSpd", "Tur", "Quiet", "SwUpDn", "SwingLfRig", "SwhSlp", "Blo",
-    "Health", "Lig", "hid",
+    "Pow",
+    "Mod",
+    "SetTem",
+    "TemUn",
+    "TemSen",
+    "WdSpd",
+    "Tur",
+    "Quiet",
+    "SwUpDn",
+    "SwingLfRig",
+    "SwhSlp",
+    "Blo",
+    "Health",
+    "Lig",
+    "hid",
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -31,19 +44,25 @@ pub fn is_timeout(e: &str) -> bool {
 /// Sends one UDP datagram to ip:7000 and waits for a reply from that ip.
 /// 2s per attempt, 2 retries. A fresh socket per request so replies never cross.
 pub async fn request(ip: IpAddr, packet: &Value) -> Result<Value, String> {
-    let sock = UdpSocket::bind("0.0.0.0:0").await.map_err(|e| e.to_string())?;
+    let sock = UdpSocket::bind("0.0.0.0:0")
+        .await
+        .map_err(|e| e.to_string())?;
     let data = packet.to_string();
     let mut buf = [0u8; 4096];
     for _ in 0..=RETRIES {
-        sock.send_to(data.as_bytes(), SocketAddr::new(ip, PORT)).await.map_err(|e| e.to_string())?;
+        // A send error (e.g. host unreachable after DHCP moved the unit) counts as a
+        // silent attempt, so the caller still sees "timeout" and rescans by MAC.
+        let _ = sock
+            .send_to(data.as_bytes(), SocketAddr::new(ip, PORT))
+            .await;
         let deadline = Instant::now() + TIMEOUT;
         while let Ok(r) = timeout_at(deadline, sock.recv_from(&mut buf)).await {
             // Windows surfaces ICMP "port unreachable" as a recv error; treat it like silence.
             let Ok((n, from)) = r else { continue };
-            if from.ip() == ip {
-                if let Ok(v) = serde_json::from_slice::<Value>(&buf[..n]) {
-                    return Ok(v);
-                }
+            if from.ip() == ip
+                && let Ok(v) = serde_json::from_slice::<Value>(&buf[..n])
+            {
+                return Ok(v);
             }
         }
     }
@@ -51,7 +70,14 @@ pub async fn request(ip: IpAddr, packet: &Value) -> Result<Value, String> {
 }
 
 /// Encrypts `pack`, wraps it like greeclimate's _generate_payload and returns the decrypted reply pack.
-async fn send_pack(ip: IpAddr, mac: &str, v: Version, key: &str, bind: bool, mut pack: Map<String, Value>) -> Result<Map<String, Value>, String> {
+async fn send_pack(
+    ip: IpAddr,
+    mac: &str,
+    v: Version,
+    key: &str,
+    bind: bool,
+    mut pack: Map<String, Value>,
+) -> Result<Map<String, Value>, String> {
     pack.insert("mac".into(), json!(mac));
     let (enc, tag) = crypto::encrypt(v, key, &Value::Object(pack).to_string())?;
     let mut packet = json!({"cid": "app", "i": if bind { 1 } else { 0 }, "t": "pack", "uid": 0, "tcid": mac, "pack": enc});
@@ -72,9 +98,21 @@ pub async fn bind(ip: IpAddr, mac: &str, hint: Version) -> Result<Device, String
     for v in [hint, hint.other()] {
         let pack = json!({"t": "bind", "uid": 0}).as_object().unwrap().clone();
         match send_pack(ip, mac, v, v.generic_key(), true, pack).await {
-            Ok(r) if r.get("t").and_then(Value::as_str).is_some_and(|t| t.eq_ignore_ascii_case("bindok")) => {
-                let key = r.get("key").and_then(Value::as_str).ok_or("bindok sem chave")?;
-                return Ok(Device { ip, mac: mac.into(), key: key.into(), version: v });
+            Ok(r)
+                if r.get("t")
+                    .and_then(Value::as_str)
+                    .is_some_and(|t| t.eq_ignore_ascii_case("bindok")) =>
+            {
+                let key = r
+                    .get("key")
+                    .and_then(Value::as_str)
+                    .ok_or("bindok sem chave")?;
+                return Ok(Device {
+                    ip,
+                    mac: mac.into(),
+                    key: key.into(),
+                    version: v,
+                });
             }
             Ok(r) => last = format!("resposta inesperada ao bind: {}", Value::Object(r)),
             Err(e) => last = e,
@@ -86,19 +124,32 @@ pub async fn bind(ip: IpAddr, mac: &str, hint: Version) -> Result<Device, String
 impl Device {
     /// {"cols":[...],"mac":..,"t":"status"} -> zip(cols, dat)
     pub async fn status(&self, cols: &[&str]) -> Result<Map<String, Value>, String> {
-        let pack = json!({"t": "status", "cols": cols}).as_object().unwrap().clone();
+        let pack = json!({"t": "status", "cols": cols})
+            .as_object()
+            .unwrap()
+            .clone();
         let r = send_pack(self.ip, &self.mac, self.version, &self.key, false, pack).await?;
         let (Some(Value::Array(c)), Some(Value::Array(d))) = (r.get("cols"), r.get("dat")) else {
-            return Err(format!("resposta de status inesperada: {}", Value::Object(r)));
+            return Err(format!(
+                "resposta de status inesperada: {}",
+                Value::Object(r)
+            ));
         };
-        Ok(c.iter().filter_map(Value::as_str).map(String::from).zip(d.iter().cloned()).collect())
+        Ok(c.iter()
+            .filter_map(Value::as_str)
+            .map(String::from)
+            .zip(d.iter().cloned())
+            .collect())
     }
 
     /// {"opt":[...],"p":[...],"t":"cmd"}
     pub async fn cmd(&self, props: &[(String, i64)]) -> Result<(), String> {
         let opt: Vec<&str> = props.iter().map(|(k, _)| k.as_str()).collect();
         let p: Vec<i64> = props.iter().map(|(_, v)| *v).collect();
-        let pack = json!({"t": "cmd", "opt": opt, "p": p}).as_object().unwrap().clone();
+        let pack = json!({"t": "cmd", "opt": opt, "p": p})
+            .as_object()
+            .unwrap()
+            .clone();
         let r = send_pack(self.ip, &self.mac, self.version, &self.key, false, pack).await?;
         match r.get("r").and_then(Value::as_i64) {
             Some(200) | None => Ok(()),
@@ -121,7 +172,11 @@ fn hid_major(hid: &str) -> Option<u32> {
 /// `v4` caches the first-reading decision like greeclimate's check_version.
 pub fn room_temp(status: &Map<String, Value>, v4: &mut Option<bool>) -> Option<i64> {
     let t = status.get("TemSen")?.as_i64()?;
-    let hid_v4 = status.get("hid").and_then(Value::as_str).and_then(hid_major) == Some(4);
+    let hid_v4 = status
+        .get("hid")
+        .and_then(Value::as_str)
+        .and_then(hid_major)
+        == Some(4);
     let v4 = *v4.get_or_insert(t != 0 && t < 40) || hid_v4;
     match (v4, t) {
         (true, t) => Some(t),
@@ -156,7 +211,10 @@ mod tests {
         assert_eq!(room_temp(&st(json!({"TemSen": 41})), &mut v4), Some(41));
         // hid says v4
         let mut v4 = None;
-        assert_eq!(room_temp(&st(json!({"TemSen": 50, "hid": "aV4.1.bin"})), &mut v4), Some(50));
+        assert_eq!(
+            room_temp(&st(json!({"TemSen": 50, "hid": "aV4.1.bin"})), &mut v4),
+            Some(50)
+        );
         let mut v4 = None;
         assert_eq!(room_temp(&st(json!({"TemSen": 0})), &mut v4), None);
     }

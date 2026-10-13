@@ -7,8 +7,6 @@ const DEBOUNCE_MS = 400;
 // Polls landing right after a local change would flip the UI back; ignore them for a bit.
 const SETTLE_MS = 1500;
 
-const pick = (p: Props, keys: string[]) => Object.fromEntries(keys.map((k) => [k, p[k]]));
-
 export function useAcState() {
   // undefined = still loading, null = no device configured
   const [info, setInfo] = useState<Info | null | undefined>(undefined);
@@ -17,14 +15,14 @@ export function useAcState() {
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
-  const propsRef = useRef<Props>({});
-  propsRef.current = props ?? {};
+  // Last state reported by the unit (Rust folds successful cmds into it), the revert target.
+  const confirmed = useRef<Props>({});
   const busy = useRef(0);
   const settleUntil = useRef(0);
   const tempTimer = useRef<number | undefined>(undefined);
-  const tempBefore = useRef<number | undefined>(undefined);
 
   const applySnapshot = useCallback((s: Snapshot) => {
+    confirmed.current = s.props;
     setRoom(s.room);
     setError(null);
     if (busy.current === 0 && Date.now() >= settleUntil.current) setProps(s.props);
@@ -50,16 +48,18 @@ export function useAcState() {
     return () => clearTimeout(t);
   }, [toast]);
 
-  /** Optimistic: shows `change` now, reverts to `prev` (default: current values) if the unit rejects it. */
-  const send = useCallback(async (change: Props, prev?: Props) => {
-    const keys = Object.keys(change);
-    const before = prev ?? pick(propsRef.current, keys);
+  /** Optimistic: shows `change` now; on failure reverts the keys no newer change has touched. */
+  const send = useCallback(async (change: Props) => {
     setProps((p) => ({ ...p, ...change }));
     busy.current++;
     try {
       await invoke("send", { props: Object.entries(change) });
     } catch {
-      setProps((p) => ({ ...p, ...before }));
+      setProps((p) => {
+        const r = { ...p };
+        for (const k in change) if (r[k] === change[k]) r[k] = confirmed.current[k];
+        return r;
+      });
       setToast("Não foi possível enviar o comando");
     } finally {
       busy.current--;
@@ -71,19 +71,22 @@ export function useAcState() {
   const setTemp = useCallback(
     (t: number) => {
       t = Math.min(TEMP_MAX, Math.max(TEMP_MIN, Math.round(t)));
-      if (tempTimer.current === undefined) tempBefore.current = propsRef.current.SetTem;
       setProps((p) => ({ ...p, SetTem: t }));
       settleUntil.current = Date.now() + DEBOUNCE_MS + SETTLE_MS;
       clearTimeout(tempTimer.current);
-      tempTimer.current = window.setTimeout(() => {
-        tempTimer.current = undefined;
-        send(tempProps(t), { SetTem: tempBefore.current!, TemUn: propsRef.current.TemUn });
-      }, DEBOUNCE_MS);
+      tempTimer.current = window.setTimeout(() => send(tempProps(t)), DEBOUNCE_MS);
     },
     [send],
   );
 
-  const refresh = useCallback(() => invoke<Snapshot>("refresh").catch(() => {}), []);
+  /** A (possibly different) unit was just bound: drop the old unit's state. */
+  const paired = useCallback((i: Info) => {
+    setInfo(i);
+    setProps(null);
+    setRoom(null);
+    setError(null);
+    confirmed.current = {};
+  }, []);
 
-  return { info, setInfo, props, room, error, toast, send, setTemp, refresh };
+  return { info, setInfo, paired, props, room, error, toast, send, setTemp };
 }

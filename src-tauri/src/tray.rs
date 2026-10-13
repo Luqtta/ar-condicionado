@@ -14,7 +14,14 @@ static HIDDEN_AT: Mutex<Option<Instant>> = Mutex::new(None);
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
-    let autostart = CheckMenuItem::with_id(app, "autostart", "Iniciar com o Windows", true, autostart_on, None::<&str>)?;
+    let autostart = CheckMenuItem::with_id(
+        app,
+        "autostart",
+        "Iniciar com o Windows",
+        true,
+        autostart_on,
+        None::<&str>,
+    )?;
     let menu = Menu::with_items(
         app,
         &[
@@ -54,7 +61,13 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
             _ => {}
         })
         .on_tray_icon_event(|tray, e| {
-            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, rect, .. } = e {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                rect,
+                ..
+            } = e
+            {
                 toggle_flyout(tray.app_handle(), rect);
             }
         })
@@ -63,8 +76,13 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn toggle_flyout(app: &AppHandle, rect: Rect) {
-    let Some(w) = app.get_webview_window("main") else { return };
-    let just_hidden = HIDDEN_AT.lock().unwrap().is_some_and(|t| t.elapsed() < Duration::from_millis(300));
+    let Some(w) = app.get_webview_window("main") else {
+        return;
+    };
+    let just_hidden = HIDDEN_AT
+        .lock()
+        .unwrap()
+        .is_some_and(|t| t.elapsed() < Duration::from_millis(300));
     if w.is_visible().unwrap_or(false) {
         let _ = w.hide();
     } else if !just_hidden {
@@ -74,7 +92,9 @@ fn toggle_flyout(app: &AppHandle, rect: Rect) {
 
 /// Shows the flyout above the tray icon (or the bottom-right corner), clamped to the work area.
 pub fn show_flyout(app: &AppHandle, anchor: Option<Rect>) {
-    let Some(w) = app.get_webview_window("main") else { return };
+    let Some(w) = app.get_webview_window("main") else {
+        return;
+    };
     // Tray rects are physical on Windows, so the scale factor is unused here.
     let center = anchor.map(|r| {
         let p = r.position.to_physical::<f64>(1.0);
@@ -84,14 +104,23 @@ pub fn show_flyout(app: &AppHandle, anchor: Option<Rect>) {
     let monitor = center
         .and_then(|(x, y)| app.monitor_from_point(x, y).ok().flatten())
         .or_else(|| app.primary_monitor().ok().flatten());
-    if let (Some(m), Ok(size)) = (monitor, w.outer_size()) {
+    if let (Some(m), Ok(size), Ok(scale)) = (monitor, w.outer_size(), w.scale_factor()) {
         let wa = m.work_area();
         let margin = (12.0 * m.scale_factor()) as i32;
-        let (width, height) = (size.width as i32, size.height as i32);
+        // Size as it will be on the target monitor (Windows rescales on a DPI change).
+        let size = size
+            .to_logical::<f64>(scale)
+            .to_physical::<i32>(m.scale_factor());
         let left = wa.position.x + margin;
-        let right = wa.position.x + wa.size.width as i32 - width - margin;
-        let x = center.map_or(right, |(cx, _)| cx as i32 - width / 2).clamp(left, right.max(left));
-        let y = wa.position.y + wa.size.height as i32 - height - margin;
+        let right = wa.position.x + wa.size.width as i32 - size.width - margin;
+        let x = center
+            .map_or(right, |(cx, _)| cx as i32 - size.width / 2)
+            .clamp(left, right.max(left));
+        // Taskbar on top (Windows 10): open below it instead.
+        let y = match center {
+            Some((_, cy)) if cy < wa.position.y as f64 => wa.position.y + margin,
+            _ => wa.position.y + wa.size.height as i32 - size.height - margin,
+        };
         let _ = w.set_position(PhysicalPosition::new(x, y));
     }
     let _ = w.show();
@@ -100,11 +129,11 @@ pub fn show_flyout(app: &AppHandle, anchor: Option<Rect>) {
 }
 
 pub fn hide_on_blur(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
-        if w.is_visible().unwrap_or(false) {
-            *HIDDEN_AT.lock().unwrap() = Some(Instant::now());
-            let _ = w.hide();
-        }
+    if let Some(w) = app.get_webview_window("main")
+        && w.is_visible().unwrap_or(false)
+    {
+        *HIDDEN_AT.lock().unwrap() = Some(Instant::now());
+        let _ = w.hide();
     }
 }
 
@@ -117,7 +146,11 @@ pub fn set_tooltip_text(app: &AppHandle, text: &str) {
 pub fn set_tooltip(app: &AppHandle, s: &Snapshot) {
     let text = if s.props.get("Pow") == Some(&1) {
         let temp = s.props.get("SetTem").copied().unwrap_or_default();
-        let mode = s.props.get("Mod").and_then(|m| MODES.get(*m as usize)).unwrap_or(&"?");
+        let mode = s
+            .props
+            .get("Mod")
+            .and_then(|m| MODES.get(*m as usize))
+            .unwrap_or(&"?");
         format!("{temp}°C · {mode}")
     } else {
         "Desligado".into()

@@ -8,7 +8,10 @@ async fn main() -> Result<(), String> {
     let want = std::env::args().nth(1);
     let found = discovery::scan(Duration::from_secs(3)).await?;
     println!("scan: {}", serde_json::to_string_pretty(&found).unwrap());
-    let Some(f) = found.iter().find(|f| want.as_ref().is_none_or(|m| m.eq_ignore_ascii_case(&f.mac))) else {
+    let Some(f) = found
+        .iter()
+        .find(|f| want.as_ref().is_none_or(|m| m.eq_ignore_ascii_case(&f.mac)))
+    else {
         return Err("nenhum aparelho encontrado".into());
     };
     let dev = device::bind(f.ip, &f.mac, f.version).await?;
