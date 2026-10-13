@@ -176,6 +176,13 @@ pub async fn send(app: AppHandle, props: Vec<(String, i64)>) -> Result<(), Strin
     apply(&app, props).await
 }
 
+/// First run: the page asks to be shown once it has loaded. Showing it from setup()
+/// lost focus to the WebView2 init and the blur handler hid it again.
+#[tauri::command]
+pub fn show(app: AppHandle) {
+    tray::show_flyout(&app, None);
+}
+
 #[tauri::command]
 pub fn rename(app: AppHandle, state: State<AppState>, name: String) -> Result<(), String> {
     let mut cfg = state.cfg.lock().unwrap();

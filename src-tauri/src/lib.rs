@@ -13,14 +13,9 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| tray::show_flyout(app, None)))
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .setup(|app| {
-            let cfg = config::load(app.handle());
-            let first_run = cfg.device.is_none();
-            app.manage(commands::AppState::new(cfg));
+            app.manage(commands::AppState::new(config::load(app.handle())));
             tray::setup(app.handle())?;
             commands::spawn_poller(app.handle().clone());
-            if first_run {
-                tray::show_flyout(app.handle(), None);
-            }
             Ok(())
         })
         .on_window_event(|w, e| match e {
@@ -39,6 +34,7 @@ pub fn run() {
             commands::refresh,
             commands::send,
             commands::rename,
+            commands::show,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

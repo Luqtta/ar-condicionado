@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+@theme {
+  --color-panel: #1c1f24;
+  --color-accent: #3b8cff;
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+}
+
+/* The window is transparent; only the rounded panel paints. */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  overflow: hidden;
+  color-scheme: dark;
+  user-select: none;
+  cursor: default;
+}
+
+@keyframes airflow {
+  to {
+    stroke-dashoffset: -40;
+  }
+}
