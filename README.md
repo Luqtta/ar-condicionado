@@ -18,7 +18,7 @@ npm run tauri dev
 Build do instalador (NSIS em `src-tauri/target/release/bundle/`):
 
 ```sh
-npm run tauri build
+npm run dist   # ou: npm run tauri build
 ```
 
 ## Testando o protocolo com o aparelho real
