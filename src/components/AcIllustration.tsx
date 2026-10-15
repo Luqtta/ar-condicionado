@@ -25,10 +25,7 @@ export function AcIllustration({ on, color, fan, light }: { on: boolean; color: 
           <path
             key={x}
             d={`M${x} 64 q -8 14 0 26 q 8 12 0 26`}
-            style={{
-              animation: on ? `airflow ${duration} linear infinite` : "none",
-              animationDelay: `${-i * 0.23}s`,
-            }}
+            style={{ animation: on ? `airflow ${duration} linear ${-i * 0.23}s infinite` : "none" }}
           />
         ))}
       </g>
