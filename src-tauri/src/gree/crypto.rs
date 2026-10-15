@@ -2,9 +2,18 @@
 use aes::Aes128;
 use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit, generic_array::GenericArray};
 use aes_gcm::{AeadInPlace, Aes128Gcm, Nonce, Tag};
-use base64::{Engine, engine::general_purpose::STANDARD as B64};
+use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
+use base64::{Engine, alphabet};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+// Lenient like Python's b64decode: real units send tags with non-zero trailing bits.
+const B64: GeneralPurpose = GeneralPurpose::new(
+    &alphabet::STANDARD,
+    GeneralPurposeConfig::new()
+        .with_decode_allow_trailing_bits(true)
+        .with_decode_padding_mode(DecodePaddingMode::Indifferent),
+);
 
 const GCM_NONCE: [u8; 12] = [
     0x54, 0x40, 0x78, 0x44, 0x49, 0x67, 0x5a, 0x51, 0x6c, 0x5e, 0x63, 0x13,

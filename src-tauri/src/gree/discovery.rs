@@ -63,27 +63,34 @@ fn parse_reply(data: &[u8], ip: IpAddr) -> Option<Found> {
     })
 }
 
-/// Broadcasts {"t":"scan"} and collects replies for `wait`.
+/// Broadcasts {"t":"scan"} every second and collects replies for `wait`.
+/// Real units often ignore a single broadcast, so it is repeated.
 pub async fn scan(wait: Duration) -> Result<Vec<Found>, String> {
     let sock = UdpSocket::bind("0.0.0.0:0")
         .await
         .map_err(|e| e.to_string())?;
     sock.set_broadcast(true).map_err(|e| e.to_string())?;
-    let mut sent = false;
-    for b in broadcast_addrs() {
-        sent |= sock
-            .send_to(br#"{"t":"scan"}"#, SocketAddr::new(b.into(), PORT))
-            .await
-            .is_ok();
-    }
-    if !sent {
-        return Err("não foi possível enviar o broadcast de busca".into());
-    }
+    let addrs = broadcast_addrs();
     let deadline = Instant::now() + wait;
+    let mut next_send = Instant::now();
     let mut found: Vec<Found> = Vec::new();
     let mut buf = [0u8; 4096];
-    while let Ok(r) = timeout_at(deadline, sock.recv_from(&mut buf)).await {
-        let Ok((n, from)) = r else { continue };
+    while Instant::now() < deadline {
+        if Instant::now() >= next_send {
+            let mut sent = false;
+            for b in &addrs {
+                let to = SocketAddr::new((*b).into(), PORT);
+                sent |= sock.send_to(br#"{"t":"scan"}"#, to).await.is_ok();
+            }
+            if !sent && found.is_empty() {
+                return Err("não foi possível enviar o broadcast de busca".into());
+            }
+            next_send += Duration::from_secs(1);
+        }
+        let Ok(Ok((n, from))) = timeout_at(next_send.min(deadline), sock.recv_from(&mut buf)).await
+        else {
+            continue;
+        };
         if let Some(f) = parse_reply(&buf[..n], from.ip())
             && !found.iter().any(|x| x.mac == f.mac)
         {
