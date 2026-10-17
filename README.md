@@ -1,45 +1,83 @@
 # Ar Condicionado
 
-App de bandeja do Windows para controlar ar-condicionado Gree (e marcas com o mesmo módulo Wi-Fi) pela rede local, via o protocolo UDP do Gree, sem nuvem. Tauri 2 + React + TypeScript + Tailwind.
+App de bandeja pro Windows que controla ar-condicionado Gree direto pela rede local. Sem nuvem, sem conta e sem o app da Gree no meio: o PC conversa por UDP com o módulo Wi-Fi do aparelho.
 
-## Requisitos
+![screenshot](docs/screenshot.png)
 
-- Windows 10/11 com WebView2
-- Node 20+ e Rust (stable, MSVC)
-- PC e aparelho na mesma rede; o Firewall do Windows pode pedir permissão na primeira busca
+## O que faz
 
-## Desenvolvimento
+- Fica na bandeja do Windows. Clique esquerdo abre o painel, clique direito tem ligar/desligar, procurar aparelhos, iniciar com o Windows e sair.
+- Controla tudo do dia a dia: liga/desliga, temperatura (16 a 30 °C), modo (auto, frio, seco, ventilar, quente), velocidade do vento, oscilação vertical/horizontal, turbo, sono, silencioso, X-Fan e luz do display.
+- Mostra a temperatura ambiente lida pelo sensor do próprio aparelho.
+- O tooltip do ícone mostra o estado atual, tipo `18°C · Frio` ou `Desligado`.
+- Lê o estado a cada 5 s com o painel aberto e a cada 60 s fechado, então o que você mudar no controle remoto aparece no app.
+- A interface responde na hora e desfaz a mudança se o aparelho não confirmar.
+- Se o roteador trocar o IP do aparelho, o app acha ele de novo pelo MAC.
+
+## Como funciona
+
+O módulo Wi-Fi da Gree (usado também por algumas outras marcas) escuta comandos em JSON na porta UDP 7000:
+
+1. **Busca**: broadcast de `{"t":"scan"}` na rede. Cada aparelho responde com nome, MAC e firmware, criptografado com uma chave genérica.
+2. **Pareamento**: o app manda um `bind` com a chave genérica e recebe a chave própria do aparelho.
+3. **Uso**: `status` pra ler e `cmd` pra mudar, tudo criptografado com a chave do aparelho.
+
+Existem duas versões de criptografia: AES-128-ECB (firmwares antigos) e AES-128-GCM (novos). O app tenta as duas e guarda a que funcionou. Tem aparelho que responde a busca numa e o pareamento na outra, então isso é testado nas duas etapas.
+
+IP, MAC, chave e versão ficam salvos em `%APPDATA%\com.local.arcondicionado\config.json`.
+
+## Stack
+
+- **Tauri 2**: back em Rust (protocolo, bandeja, polling, config) e front no WebView2
+- **React + TypeScript + Tailwind** na interface
+- **tokio, aes, aes-gcm, base64, serde_json** no protocolo
+
+## Rodando
+
+Precisa de Windows 10/11, Node 20+ e Rust stable (MSVC).
 
 ```sh
 npm install
 npm run tauri dev
 ```
 
-Build do instalador (NSIS em `src-tauri/target/release/bundle/`):
+Pra gerar o instalador:
 
 ```sh
-npm run dist   # ou: npm run tauri build
+npm run dist
 ```
 
-## Testando o protocolo com o aparelho real
+Sai em `src-tauri/target/release/bundle/nsis/`.
 
-Antes de usar a UI, dá para validar scan, bind e status direto no terminal:
+Na primeira vez o app abre a tela de busca: escolhe o aparelho e pronto. PC e ar-condicionado precisam estar na mesma rede, e o firewall do Windows pode pedir permissão.
+
+## Testando sem a interface
 
 ```sh
 cd src-tauri
-cargo run --example gree_debug            # primeiro aparelho encontrado
-cargo run --example gree_debug f4911e...  # um MAC específico
-cargo test                                # vetores de criptografia e offset do TemSen
+cargo run --example gree_debug          # busca, pareia e imprime o status em JSON
+cargo run --example gree_debug <mac>    # um aparelho específico
+cargo test                              # criptografia e offset do sensor
 ```
 
-Só lê o estado; nenhum comando é enviado ao aparelho.
+O debug só lê, não manda comando nenhum pro aparelho.
 
-## Como funciona
+## Estrutura
 
-- Busca: broadcast `{"t":"scan"}` na porta 7000 (global e por interface), respostas coletadas por 3s.
-- Criptografia: v1 (AES-128-ECB) e v2 (AES-128-GCM), detectadas automaticamente no scan e no bind.
-- Bind com a chave genérica; a chave do aparelho é salva em `%APPDATA%\com.local.arcondicionado\config.json` junto com IP, MAC e versão.
-- Timeout de 2s por pacote com 2 tentativas. Se o aparelho parar de responder, uma nova busca pelo MAC atualiza o IP (DHCP).
-- Status a cada 5s com o flyout aberto e a cada 60s fechado; o tooltip da bandeja acompanha.
+```
+src-tauri/src/
+  gree/crypto.rs       ECB e GCM
+  gree/discovery.rs    busca por broadcast
+  gree/device.rs       bind, status, cmd, retries, offset do sensor
+  commands.rs          comandos chamados pela interface e polling
+  tray.rs              ícone, menu e posição do painel
+  config.rs            config no AppData
+src/
+  hooks/useAcState.ts  estado, atualização otimista e debounce
+  lib/mappings.ts      valores da interface <-> protocolo
+  components/          telas e controles
+```
 
-Referências do protocolo: [greeclimate](https://github.com/cmroche/greeclimate) e [gree-remote](https://github.com/tomikaa87/gree-remote).
+## Créditos
+
+O protocolo foi implementado em cima do que já foi mapeado por [greeclimate](https://github.com/cmroche/greeclimate) e [gree-remote](https://github.com/tomikaa87/gree-remote).
